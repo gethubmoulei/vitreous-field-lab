@@ -1,0 +1,12 @@
+.git
+.github
+.next
+.npm-cache
+node_modules
+out
+coverage
+.env*
+*.log
+README.md
+CONTRIBUTING.md
+SECURITY.md
