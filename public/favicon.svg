@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">飞蚊症模拟器网站图标</title>
+  <desc id="desc">蓝绿色圆角背景中的抽象眼睛，瞳孔前有半透明飞蚊漂浮物。</desc>
+  <defs>
+    <linearGradient id="bg" x1="72" y1="56" x2="440" y2="456" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#123B63"/>
+      <stop offset="0.55" stop-color="#0E5571"/>
+      <stop offset="1" stop-color="#087A7B"/>
+    </linearGradient>
+    <radialGradient id="iris" cx="42%" cy="38%" r="65%">
+      <stop offset="0" stop-color="#8FF0E4"/>
+      <stop offset="0.45" stop-color="#31C4C3"/>
+      <stop offset="1" stop-color="#087B87"/>
+    </radialGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="12" stdDeviation="18" flood-color="#00131F" flood-opacity="0.28"/>
+    </filter>
+    <filter id="floaterBlur" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="1.4"/>
+    </filter>
+    <clipPath id="eyeClip">
+      <path d="M75 259C116 183 181 145 256 145C331 145 396 183 437 259C396 335 331 373 256 373C181 373 116 335 75 259Z"/>
+    </clipPath>
+  </defs>
+
+  <rect x="24" y="24" width="464" height="464" rx="112" fill="url(#bg)"/>
+
+  <g filter="url(#shadow)">
+    <path d="M75 259C116 183 181 145 256 145C331 145 396 183 437 259C396 335 331 373 256 373C181 373 116 335 75 259Z" fill="#F5FEFF"/>
+    <path d="M75 259C116 183 181 145 256 145C331 145 396 183 437 259" fill="none" stroke="#B8EEF0" stroke-width="10" stroke-linecap="round"/>
+    <path d="M75 259C116 335 181 373 256 373C331 373 396 335 437 259" fill="none" stroke="#D8F7F7" stroke-width="8" stroke-linecap="round"/>
+    <circle cx="256" cy="259" r="91" fill="url(#iris)"/>
+    <circle cx="256" cy="259" r="49" fill="#083947"/>
+    <circle cx="256" cy="259" r="23" fill="#041E27"/>
+    <ellipse cx="226" cy="221" rx="23" ry="15" fill="#FFFFFF" opacity="0.72"/>
+  </g>
+
+  <g clip-path="url(#eyeClip)" fill="none" stroke="#061B25" stroke-linecap="round" filter="url(#floaterBlur)">
+    <path d="M162 220C179 205 194 212 195 229C196 245 178 252 183 269C188 286 207 283 215 299" stroke-width="11" opacity="0.50"/>
+    <path d="M337 203C324 220 329 236 345 242C361 248 370 263 359 280" stroke-width="8" opacity="0.42"/>
+    <path d="M292 305C300 289 314 286 324 298" stroke-width="7" opacity="0.35"/>
+  </g>
+
+  <g clip-path="url(#eyeClip)" fill="#071B24">
+    <ellipse cx="178" cy="289" rx="9" ry="13" opacity="0.48"/>
+    <circle cx="346" cy="228" r="7" opacity="0.42"/>
+    <ellipse cx="316" cy="310" rx="6" ry="9" opacity="0.33"/>
+    <circle cx="205" cy="206" r="5" opacity="0.34"/>
+  </g>
+
+  <rect x="35" y="35" width="442" height="442" rx="101" fill="none" stroke="#FFFFFF" stroke-opacity="0.10" stroke-width="3"/>
+</svg>

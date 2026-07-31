@@ -1,0 +1,11 @@
+services:
+  vitreous-field-lab:
+    build:
+      context: .
+    image: vitreous-field-lab:local
+    container_name: vitreous-field-lab
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8080}:80"
+    security_opt:
+      - no-new-privileges:true
