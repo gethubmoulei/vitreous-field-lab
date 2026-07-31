@@ -111,7 +111,7 @@ test("language selection supports Chinese, English, automatic detection, and per
   assert.match(page, /className=\{`language-toggle/);
 });
 
-test("the settings panel prioritizes backgrounds, collapses from outside, and has reset only", async () => {
+test("the settings panel prioritizes backgrounds, bundles scene photos, collapses from outside, and has reset only", async () => {
   const [page, css] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
@@ -126,8 +126,20 @@ test("the settings panel prioritizes backgrounds, collapses from outside, and ha
   assert.match(page, /<div className="panel-actions"><button onClick=\{resetSimulation\}>/);
   assert.doesNotMatch(page, /setPaused|text\.pause|text\.continue/);
   assert.doesNotMatch(css, /panel-actions \.primary|status\.paused/);
-  assert.doesNotMatch(css, /url\(["']?\/images\//, "the public build must not bundle the private scene photos");
-  assert.match(css, /\.scene-sky\{background-image:linear-gradient/);
+  assert.match(css, /\.scene-sky\{background-image:url\(["']?\/images\/outdoor\.webp["']?\)\}/);
+  assert.match(css, /\.scene-paper\{background-image:url\(["']?\/images\/reading\.webp["']?\)\}/);
+  assert.match(css, /\.scene-room\{background-image:url\(["']?\/images\/indoor\.webp["']?\)\}/);
+
+  for (const image of ["outdoor.webp", "reading.webp", "indoor.webp"]) {
+    const [source, exported] = await Promise.all([
+      readFile(new URL(`../public/images/${image}`, import.meta.url)),
+      readFile(new URL(`../out/images/${image}`, import.meta.url)),
+    ]);
+
+    assert.equal(source.subarray(0, 4).toString("ascii"), "RIFF");
+    assert.equal(source.subarray(8, 12).toString("ascii"), "WEBP");
+    assert.deepEqual(exported, source, `${image} must be copied unchanged into the static export`);
+  }
 });
 
 test("filaments use compositor blur without the legacy sharp overlay", async () => {

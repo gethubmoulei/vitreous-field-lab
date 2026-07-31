@@ -100,7 +100,7 @@ APP_PORT=8090 docker compose up -d --build
 
 ```text
 app/                   页面、样式和模拟逻辑
-public/                网站图标
+public/                网站图标和场景背景图片
 tests/                 构建产物和模拟参数测试
 .github/               CI 与依赖更新配置
 Dockerfile             静态站点容器镜像
