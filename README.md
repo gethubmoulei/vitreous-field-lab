@@ -51,6 +51,29 @@ npm test
 
 静态文件会生成到 `out/` 目录。
 
+## 下载静态发布包
+
+每个正式版本都会在 [Releases](https://github.com/gethubmoulei/vitreous-field-lab/releases) 页面提供可直接部署的静态网站压缩包：
+
+```text
+vitreous-field-lab-static-v1.0.0.zip
+```
+
+同名的 `.sha256` 文件可用于校验压缩包是否完整。
+
+## 发布新版本
+
+维护者向 GitHub 推送以 `v` 开头的版本标签后，GitHub Actions 会自动完成代码检查、静态构建、测试、压缩，并创建 Release：
+
+```bash
+git switch main
+git pull
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+后续版本依次使用 `v1.0.1`、`v1.1.0` 等新标签。发布失败时可在 GitHub 的 Actions 页面重新运行对应任务；不要重复使用已经代表其他代码的版本标签。
+
 ## Docker 部署
 
 ```bash
