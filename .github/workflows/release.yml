@@ -56,7 +56,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          archive="vitreous-field-lab-static-${RELEASE_TAG}.zip"
+          archive="FloatersSimulation-static-${RELEASE_TAG}.zip"
           (cd out && zip -r "../${archive}" .)
           sha256sum "${archive}" > "${archive}.sha256"
           echo "ARCHIVE_NAME=${archive}" >> "${GITHUB_ENV}"
