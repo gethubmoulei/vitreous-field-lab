@@ -13,7 +13,7 @@ COPY next.config.ts tsconfig.json ./
 
 RUN npm run build
 
-FROM nginx:1.28-alpine AS runtime
+FROM nginx:1.31-alpine AS runtime
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /app/out /usr/share/nginx/html
