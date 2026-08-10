@@ -661,7 +661,7 @@ export default function Home() {
   const settingsRef = useRef(defaults);
   const shapeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const blobTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pointerRef = useRef({ x: 0, y: 0, lx: 0, ly: 0, vx: 0, vy: 0, active: false, last: 0, history: [] as MotionSample[] });
+  const pointerRef = useRef({ x: 0, y: 0, lx: 0, ly: 0, vx: 0, vy: 0, active: false, pointerId: null as number | null, last: 0, history: [] as MotionSample[] });
   const [settings, setSettings] = useState(defaults);
   const [scene, setScene] = useState("sky");
   const [customBackground, setCustomBackground] = useState<string | null>(null);
@@ -1124,7 +1124,8 @@ export default function Home() {
 
   const movePointer = (event: ReactPointerEvent<HTMLElement>) => {
     const pointer = pointerRef.current;
-    const now = performance.now();
+    if (event.pointerType !== "mouse" && pointer.pointerId !== event.pointerId) return;
+    const now = event.timeStamp;
     const x = event.clientX;
     const y = event.clientY;
     if (pointer.active) {
@@ -1135,6 +1136,37 @@ export default function Home() {
     }
     pointer.x = x; pointer.y = y; pointer.lx = x; pointer.ly = y; pointer.last = now; pointer.active = true;
     if (tipVisible) setTipVisible(false);
+  };
+
+  const beginPointer = (event: ReactPointerEvent<HTMLElement>) => {
+    collapsePanelOutside(event);
+    const target = event.target as Element;
+    if (target.closest(".panel") || target.closest(".language-toggle")) return;
+
+    const pointer = pointerRef.current;
+    const now = event.timeStamp;
+    pointer.x = event.clientX;
+    pointer.y = event.clientY;
+    pointer.lx = event.clientX;
+    pointer.ly = event.clientY;
+    pointer.vx = 0;
+    pointer.vy = 0;
+    pointer.last = now;
+    pointer.active = true;
+    pointer.pointerId = event.pointerId;
+    pointer.history.length = 0;
+    pointer.history.push({ time: now, vx: 0, vy: 0 });
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const endPointer = (event: ReactPointerEvent<HTMLElement>) => {
+    const pointer = pointerRef.current;
+    if (pointer.pointerId !== event.pointerId) return;
+    pointer.active = false;
+    pointer.pointerId = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
   };
 
   const collapsePanelOutside = (event: ReactPointerEvent<HTMLElement>) => {
@@ -1166,7 +1198,14 @@ export default function Home() {
     : undefined;
 
   return (
-    <main className={`experience scene-${scene}`} style={backgroundStyle} onPointerMove={movePointer} onPointerDown={collapsePanelOutside}>
+    <main
+      className={`experience scene-${scene}`}
+      style={backgroundStyle}
+      onPointerDown={beginPointer}
+      onPointerMove={movePointer}
+      onPointerUp={endPointer}
+      onPointerCancel={endPointer}
+    >
       <div className="scene-content" aria-hidden="true">
         {scene === "paper" && <div className="reading-page"><span>THE QUIET ART OF SEEING</span><h2>Look slowly.</h2><p>When the gaze rests on a bright page, tiny shadows may drift across the field of view—always moving just after the eye.</p><p>Light enters, the page softens, and attention notices what was already there.</p></div>}
         {scene === "room" && <><div className="window-light"/><div className="plant"><i/><i/><i/><b/></div><div className="desk-line"/></>}

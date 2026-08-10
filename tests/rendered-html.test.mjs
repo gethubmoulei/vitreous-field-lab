@@ -120,9 +120,15 @@ test("the settings panel prioritizes backgrounds, bundles scene photos, collapse
   const backgroundSection = page.indexOf('className="control-section background-section"');
   const floaterSection = page.indexOf('<span>{text.floaters}</span>');
   assert.ok(backgroundSection > 0 && backgroundSection < floaterSection);
-  assert.match(page, /onPointerDown=\{collapsePanelOutside\}/);
+  assert.match(page, /onPointerDown=\{beginPointer\}/);
+  assert.match(page, /collapsePanelOutside\(event\)/);
+  assert.match(page, /setPointerCapture\(event\.pointerId\)/);
+  assert.match(page, /onPointerUp=\{endPointer\}/);
+  assert.match(page, /onPointerCancel=\{endPointer\}/);
   assert.match(page, /!target\.closest\("\.panel"\)/);
   assert.match(page, /!target\.closest\("\.language-toggle"\)/);
+  assert.match(css, /\.experience\{[^}]*touch-action:none/);
+  assert.match(css, /\.panel\{[^}]*touch-action:pan-y/);
   assert.match(page, /<div className="panel-actions"><button onClick=\{resetSimulation\}>/);
   assert.doesNotMatch(page, /setPaused|text\.pause|text\.continue/);
   assert.doesNotMatch(css, /panel-actions \.primary|status\.paused/);
