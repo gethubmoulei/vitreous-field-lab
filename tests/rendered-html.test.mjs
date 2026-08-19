@@ -9,6 +9,7 @@ import {
   getLoopProbability,
   MAX_LAYER_COUNT,
 } from "../app/floater-optics.mjs";
+import { clampPitch, panoramaFov, panoramaSmoothingFactor, wrapYaw } from "../app/panorama-controls.mjs";
 
 async function render() {
   return readFile(new URL("../out/index.html", import.meta.url), "utf8");
@@ -64,6 +65,22 @@ test("loop probability depends monotonically on length and curl", () => {
   assert.ok(getLoopProbability(36, 150) <= 0.78);
 });
 
+test("panorama view math clamps pitch, wraps yaw, and maps zoom to field of view", () => {
+  assert.equal(clampPitch(100), 85);
+  assert.equal(clampPitch(-100), -85);
+  assert.equal(clampPitch(32), 32);
+  assert.equal(wrapYaw(180), -180);
+  assert.equal(wrapYaw(540), -180);
+  assert.equal(wrapYaw(-181), 179);
+  assert.equal(panoramaFov(50), 110);
+  assert.equal(panoramaFov(100), 90);
+  assert.equal(panoramaFov(200), 45);
+  assert.ok(panoramaFov(150) < panoramaFov(100));
+  assert.equal(panoramaSmoothingFactor(0), 0);
+  assert.ok(panoramaSmoothingFactor(16) > 0 && panoramaSmoothingFactor(16) < 1);
+  assert.ok(panoramaSmoothingFactor(32) > panoramaSmoothingFactor(16));
+});
+
 test("filament material keeps cells subordinate to the translucent core", () => {
   const material = getFilamentMaterial(20, 0.5, 2.6);
   assert.ok(material.alpha <= 0.32);
@@ -89,6 +106,8 @@ test("control defaults and requested ranges stay aligned", async () => {
     /lag:\s*180/,
     /damping:\s*70/,
     /gravity:\s*10/,
+    /panoramaSensitivity:\s*100/,
+    /panoramaZoom:\s*100/,
   ]) assert.match(page, expectedDefault);
 
   assert.match(page, /label=\{text\.count\}[^\n]*min=\{1\} max=\{70\}/);
@@ -135,8 +154,10 @@ test("the settings panel prioritizes backgrounds, bundles scene photos, collapse
   assert.match(css, /\.scene-sky\{background-image:url\(["']?\/images\/outdoor\.webp["']?\)\}/);
   assert.match(css, /\.scene-paper\{background-image:url\(["']?\/images\/reading\.webp["']?\)\}/);
   assert.match(css, /\.scene-room\{background-image:url\(["']?\/images\/indoor\.webp["']?\)\}/);
+  assert.match(css, /\.scene-outdoor360\{background-image:url\(["']?\/images\/outdoor_360\.webp["']?\)\}/);
+  assert.match(css, /\.scene-moon360\{background-image:url\(["']?\/images\/moon_360\.webp["']?\)\}/);
 
-  for (const image of ["outdoor.webp", "reading.webp", "indoor.webp"]) {
+  for (const image of ["outdoor.webp", "reading.webp", "indoor.webp", "outdoor_360.webp", "moon_360.webp"]) {
     const [source, exported] = await Promise.all([
       readFile(new URL(`../public/images/${image}`, import.meta.url)),
       readFile(new URL(`../out/images/${image}`, import.meta.url)),
@@ -146,6 +167,42 @@ test("the settings panel prioritizes backgrounds, bundles scene photos, collapse
     assert.equal(source.subarray(8, 12).toString("ascii"), "WEBP");
     assert.deepEqual(exported, source, `${image} must be copied unchanged into the static export`);
   }
+});
+
+test("360 scenes require click-drag for the view while hover still drives floaters", async () => {
+  const [page, css] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(page, /id:\s*"outdoor360"[\s\S]*source:\s*"\/images\/outdoor_360\.webp"/);
+  assert.match(page, /id:\s*"moon360"[\s\S]*source:\s*"\/images\/moon_360\.webp"/);
+  assert.match(page, /function PanoramaViewer/);
+  assert.match(page, /getContext\("webgl"/);
+  assert.match(page, /texture2D\(uPanorama, uv\)/);
+  assert.match(page, /UNPACK_FLIP_Y_WEBGL, false/);
+  assert.match(page, /panoramaSmoothingFactor\(now - previousFrame\)/);
+  assert.match(page, /const panoramaDragRef = useRef/);
+  assert.match(page, /pointer\.vx = pointer\.vx \* 0\.38 \+ deltaX \* gain \* 0\.62/);
+  assert.match(page, /isPanorama && panoramaDrag\.active && panoramaDrag\.pointerId === event\.pointerId/);
+  assert.match(page, /panoramaViewRef\.current\.yaw = wrapYaw[\s\S]*panoramaDeltaX/);
+  assert.match(page, /panoramaDrag\.active = true/);
+  assert.match(page, /panoramaDrag\.active = false/);
+  assert.match(page, /setPointerCapture\(event\.pointerId\)/);
+  assert.match(page, /event\.pointerType !== "mouse"/);
+  assert.match(page, /按住鼠标拖拽全景/);
+  assert.match(page, /触摸屏可单指拖动视角/);
+  assert.match(page, /Click and drag the panorama/);
+  assert.match(page, /Drag with one finger on touch screens/);
+  assert.match(page, /gesture-tip \$\{isPanorama \? "panorama-tip" : ""\}/);
+  assert.match(css, /\.experience\.panorama-mode\{cursor:grab\}/);
+  assert.match(css, /\.experience\.panorama-dragging\{cursor:grabbing\}/);
+  assert.match(css, /\.gesture-tip\.panorama-tip\{top:22px/);
+  assert.match(page, /\{isPanorama && <div className="panorama-controls">/);
+  assert.match(page, /label=\{text\.panoramaSensitivity\}[^\n]*min=\{20\} max=\{200\}[^\n]*unit="%"/);
+  assert.match(page, /label=\{text\.panoramaZoom\}[^\n]*min=\{50\} max=\{200\}[^\n]*unit="%"/);
+  assert.match(page, /panoramaViewRef\.current = \{ yaw: 0, pitch: 0 \}/);
+  assert.doesNotMatch(page, /onWheel=/);
 });
 
 test("filaments use compositor blur without the legacy sharp overlay", async () => {

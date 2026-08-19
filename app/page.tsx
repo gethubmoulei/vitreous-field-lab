@@ -9,6 +9,7 @@ import {
   getLoopProbability,
   MAX_LAYER_COUNT,
 } from "./floater-optics.mjs";
+import { clampPitch, panoramaFov, panoramaSmoothingFactor, wrapYaw } from "./panorama-controls.mjs";
 
 type Settings = {
   count: number;
@@ -24,11 +25,15 @@ type Settings = {
   curl3d: number;
   blobCount: number;
   blobSizeDistribution: number;
+  panoramaSensitivity: number;
+  panoramaZoom: number;
 };
 
 type Language = "zh" | "en";
 
 type MotionSample = { time: number; vx: number; vy: number };
+
+type PanoramaView = { yaw: number; pitch: number };
 
 type Floater = {
   nodeCount: number;
@@ -96,13 +101,19 @@ const defaults: Settings = {
   curl3d: 110,
   blobCount: 5,
   blobSizeDistribution: 50,
+  panoramaSensitivity: 100,
+  panoramaZoom: 100,
 };
 
 const scenes = [
-  { id: "sky", icon: "☀" },
-  { id: "paper", icon: "Aa" },
-  { id: "room", icon: "▦" },
+  { id: "sky", icon: "☀", kind: "flat" },
+  { id: "paper", icon: "Aa", kind: "flat" },
+  { id: "room", icon: "▦", kind: "flat" },
+  { id: "outdoor360", icon: "360", kind: "panorama", source: "/images/outdoor_360.webp" },
+  { id: "moon360", icon: "◐", kind: "panorama", source: "/images/moon_360.webp" },
 ] as const;
+
+type SceneId = (typeof scenes)[number]["id"] | "custom";
 
 const translations = {
   zh: {
@@ -114,6 +125,8 @@ const translations = {
     canvasLabel: "三维柔性眼内漂浮物动态模拟",
     gestureTitle: "晃动鼠标，观察滞后",
     gestureSubtitle: "丝状漂浮物会在三维空间中柔性摆动",
+    panoramaGestureTitle: "按住鼠标拖拽全景",
+    panoramaGestureSubtitle: "触摸屏可单指拖动视角",
     collapsePanel: "收起参数面板",
     expandPanel: "展开参数面板",
     adjust: "调节",
@@ -141,7 +154,10 @@ const translations = {
     physicsNote: "每条漂浮物具有轻微不同的惯性阻尼；重力沉降使用独立通道，不受随机阻尼差异影响。",
     background: "观察背景",
     backgroundHint: "高亮背景更明显",
-    scenes: { sky: "晴空", paper: "阅读", room: "室内" },
+    scenes: { sky: "晴空", paper: "阅读", room: "室内", outdoor360: "户外360°", moon360: "月球360°" },
+    panoramaView: "全景视角",
+    panoramaSensitivity: "视角转动灵敏度",
+    panoramaZoom: "缩放大小",
     custom: "自定义",
     reset: "重置",
     disclaimer: "这是一种视觉现象模拟，并非医学诊断。",
@@ -156,6 +172,8 @@ const translations = {
     canvasLabel: "Interactive three-dimensional eye floater simulation",
     gestureTitle: "Move the pointer to observe the lag",
     gestureSubtitle: "Filaments flex and drift through three-dimensional space",
+    panoramaGestureTitle: "Click and drag the panorama",
+    panoramaGestureSubtitle: "Drag with one finger on touch screens",
     collapsePanel: "Collapse controls",
     expandPanel: "Expand controls",
     adjust: "Adjust",
@@ -183,7 +201,10 @@ const translations = {
     physicsNote: "Each floater has slightly different inertial damping. Gravity settling uses an independent channel and is not affected by this variation.",
     background: "Viewing background",
     backgroundHint: "Floaters stand out against bright scenes",
-    scenes: { sky: "Clear sky", paper: "Reading", room: "Indoor" },
+    scenes: { sky: "Clear sky", paper: "Reading", room: "Indoor", outdoor360: "Outdoor 360°", moon360: "Moon 360°" },
+    panoramaView: "Panorama view",
+    panoramaSensitivity: "View sensitivity",
+    panoramaZoom: "Zoom size",
     custom: "Custom",
     reset: "Reset",
     disclaimer: "This visual simulation is not a medical diagnosis.",
@@ -653,6 +674,182 @@ function Slider({ label, value, min = 0, max = 100, unit = "", displayValue, onC
   );
 }
 
+function PanoramaViewer({ source, zoom, viewRef }: {
+  source: string;
+  zoom: number;
+  viewRef: { current: PanoramaView };
+}) {
+  const panoramaCanvasRef = useRef<HTMLCanvasElement>(null);
+  const zoomRef = useRef(zoom);
+  const renderedViewRef = useRef<PanoramaView>({ yaw: 0, pitch: 0 });
+  const renderedFovRef = useRef(panoramaFov(zoom));
+  const [failed, setFailed] = useState(false);
+  const [readyState, setReadyState] = useState(false);
+
+  useEffect(() => { zoomRef.current = zoom; }, [zoom]);
+
+  useEffect(() => {
+    const canvas = panoramaCanvasRef.current;
+    if (!canvas) return;
+    renderedViewRef.current = { ...viewRef.current };
+    renderedFovRef.current = panoramaFov(zoomRef.current);
+    const gl = canvas.getContext("webgl", { alpha: false, antialias: false });
+    if (!gl) {
+      setFailed(true);
+      return;
+    }
+
+    const makeShader = (type: number, sourceCode: string) => {
+      const shader = gl.createShader(type);
+      if (!shader) return null;
+      gl.shaderSource(shader, sourceCode);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        gl.deleteShader(shader);
+        return null;
+      }
+      return shader;
+    };
+
+    const vertex = makeShader(gl.VERTEX_SHADER, `
+      attribute vec2 aPosition;
+      varying vec2 vUv;
+      void main() {
+        vUv = aPosition * 0.5 + 0.5;
+        gl_Position = vec4(aPosition, 0.0, 1.0);
+      }
+    `);
+    const fragment = makeShader(gl.FRAGMENT_SHADER, `
+      precision highp float;
+      varying vec2 vUv;
+      uniform sampler2D uPanorama;
+      uniform vec2 uResolution;
+      uniform float uYaw;
+      uniform float uPitch;
+      uniform float uFov;
+      const float PI = 3.141592653589793;
+      void main() {
+        vec2 screen = vUv * 2.0 - 1.0;
+        screen.x *= uResolution.x / max(1.0, uResolution.y);
+        float focal = 1.0 / tan(uFov * 0.5);
+        vec3 ray = normalize(vec3(screen.x, screen.y, focal));
+        float cp = cos(uPitch);
+        float sp = sin(uPitch);
+        ray = vec3(ray.x, ray.y * cp + ray.z * sp, -ray.y * sp + ray.z * cp);
+        float cy = cos(uYaw);
+        float sy = sin(uYaw);
+        ray = vec3(ray.x * cy + ray.z * sy, ray.y, -ray.x * sy + ray.z * cy);
+        float longitude = atan(ray.x, ray.z);
+        float latitude = asin(clamp(ray.y, -1.0, 1.0));
+        vec2 uv = vec2(fract(0.5 + longitude / (2.0 * PI)), 0.5 - latitude / PI);
+        gl_FragColor = texture2D(uPanorama, uv);
+      }
+    `);
+    const program = gl.createProgram();
+    if (!vertex || !fragment || !program) {
+      if (vertex) gl.deleteShader(vertex);
+      if (fragment) gl.deleteShader(fragment);
+      setFailed(true);
+      return;
+    }
+    gl.attachShader(program, vertex);
+    gl.attachShader(program, fragment);
+    gl.linkProgram(program);
+    gl.deleteShader(vertex);
+    gl.deleteShader(fragment);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      gl.deleteProgram(program);
+      setFailed(true);
+      return;
+    }
+
+    const buffer = gl.createBuffer();
+    const texture = gl.createTexture();
+    if (!buffer || !texture) {
+      if (buffer) gl.deleteBuffer(buffer);
+      if (texture) gl.deleteTexture(texture);
+      gl.deleteProgram(program);
+      setFailed(true);
+      return;
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]), gl.STATIC_DRAW);
+    gl.useProgram(program);
+    const position = gl.getAttribLocation(program, "aPosition");
+    gl.enableVertexAttribArray(position);
+    gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+
+    const resolutionLocation = gl.getUniformLocation(program, "uResolution");
+    const yawLocation = gl.getUniformLocation(program, "uYaw");
+    const pitchLocation = gl.getUniformLocation(program, "uPitch");
+    const fovLocation = gl.getUniformLocation(program, "uFov");
+    const panoramaLocation = gl.getUniformLocation(program, "uPanorama");
+    gl.uniform1i(panoramaLocation, 0);
+
+    let animation = 0;
+    let disposed = false;
+    let ready = false;
+    let previousFrame = performance.now();
+    const image = new Image();
+    image.onload = () => {
+      if (disposed) return;
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, image);
+      ready = true;
+      setFailed(false);
+      setReadyState(true);
+    };
+    image.onerror = () => { if (!disposed) setFailed(true); };
+    image.src = source;
+
+    const draw = (now: number) => {
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+      const width = Math.max(1, Math.round(canvas.clientWidth * dpr));
+      const height = Math.max(1, Math.round(canvas.clientHeight * dpr));
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+      if (ready) {
+        const smoothing = panoramaSmoothingFactor(now - previousFrame);
+        const renderedView = renderedViewRef.current;
+        const targetView = viewRef.current;
+        renderedView.yaw = wrapYaw(renderedView.yaw + wrapYaw(targetView.yaw - renderedView.yaw) * smoothing);
+        renderedView.pitch += (targetView.pitch - renderedView.pitch) * smoothing;
+        renderedFovRef.current += (panoramaFov(zoomRef.current) - renderedFovRef.current) * smoothing;
+        gl.viewport(0, 0, width, height);
+        gl.useProgram(program);
+        gl.uniform2f(resolutionLocation, width, height);
+        gl.uniform1f(yawLocation, renderedView.yaw * Math.PI / 180);
+        gl.uniform1f(pitchLocation, renderedView.pitch * Math.PI / 180);
+        gl.uniform1f(fovLocation, renderedFovRef.current * Math.PI / 180);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+      }
+      previousFrame = now;
+      animation = window.requestAnimationFrame(draw);
+    };
+    animation = window.requestAnimationFrame(draw);
+
+    return () => {
+      disposed = true;
+      window.cancelAnimationFrame(animation);
+      image.onload = null;
+      image.onerror = null;
+      gl.deleteTexture(texture);
+      gl.deleteBuffer(buffer);
+      gl.deleteProgram(program);
+    };
+  }, [source, viewRef]);
+
+  return <canvas ref={panoramaCanvasRef} className={`panorama-canvas ${readyState ? "ready" : ""} ${failed ? "failed" : ""}`} aria-hidden="true" />;
+}
+
 export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const filamentLayerRefs = useRef<Array<HTMLCanvasElement | null>>([]);
@@ -662,14 +859,23 @@ export default function Home() {
   const shapeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const blobTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pointerRef = useRef({ x: 0, y: 0, lx: 0, ly: 0, vx: 0, vy: 0, active: false, pointerId: null as number | null, last: 0, history: [] as MotionSample[] });
+  const panoramaDragRef = useRef({ active: false, pointerId: null as number | null, x: 0, y: 0 });
+  const panoramaViewRef = useRef<PanoramaView>({ yaw: 0, pitch: 0 });
   const [settings, setSettings] = useState(defaults);
-  const [scene, setScene] = useState("sky");
+  const [scene, setScene] = useState<SceneId>("sky");
   const [customBackground, setCustomBackground] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(true);
   const paused = false;
   const [tipVisible, setTipVisible] = useState(true);
+  const [panoramaDragging, setPanoramaDragging] = useState(false);
   const [language, setLanguage] = useState<Language>("zh");
   const text = translations[language];
+  const panoramaSource = scene === "outdoor360"
+    ? "/images/outdoor_360.webp"
+    : scene === "moon360"
+      ? "/images/moon_360.webp"
+      : null;
+  const isPanorama = panoramaSource !== null;
 
   useEffect(() => { settingsRef.current = settings; }, [settings]);
   useEffect(() => {
@@ -1129,13 +1335,30 @@ export default function Home() {
     const x = event.clientX;
     const y = event.clientY;
     if (pointer.active) {
+      const deltaX = x - pointer.lx;
+      const deltaY = y - pointer.ly;
       const elapsed = Math.max(8, now - pointer.last);
       const gain = 16.67 / elapsed;
-      pointer.vx = pointer.vx * 0.38 + (x - pointer.lx) * gain * 0.62;
-      pointer.vy = pointer.vy * 0.38 + (y - pointer.ly) * gain * 0.62;
+      pointer.vx = pointer.vx * 0.38 + deltaX * gain * 0.62;
+      pointer.vy = pointer.vy * 0.38 + deltaY * gain * 0.62;
     }
     pointer.x = x; pointer.y = y; pointer.lx = x; pointer.ly = y; pointer.last = now; pointer.active = true;
-    if (tipVisible) setTipVisible(false);
+
+    const panoramaDrag = panoramaDragRef.current;
+    if (isPanorama && panoramaDrag.active && panoramaDrag.pointerId === event.pointerId) {
+      const panoramaDeltaX = x - panoramaDrag.x;
+      const panoramaDeltaY = y - panoramaDrag.y;
+      panoramaDrag.x = x;
+      panoramaDrag.y = y;
+      if (panoramaDeltaX !== 0 || panoramaDeltaY !== 0) {
+        const sensitivity = settingsRef.current.panoramaSensitivity / 100;
+        panoramaViewRef.current.yaw = wrapYaw(panoramaViewRef.current.yaw - panoramaDeltaX * 0.12 * sensitivity);
+        panoramaViewRef.current.pitch = clampPitch(panoramaViewRef.current.pitch + panoramaDeltaY * 0.12 * sensitivity);
+        if (tipVisible) setTipVisible(false);
+      }
+    } else if (!isPanorama && tipVisible) {
+      setTipVisible(false);
+    }
   };
 
   const beginPointer = (event: ReactPointerEvent<HTMLElement>) => {
@@ -1144,29 +1367,58 @@ export default function Home() {
     if (target.closest(".panel") || target.closest(".language-toggle")) return;
 
     const pointer = pointerRef.current;
-    const now = event.timeStamp;
-    pointer.x = event.clientX;
-    pointer.y = event.clientY;
-    pointer.lx = event.clientX;
-    pointer.ly = event.clientY;
-    pointer.vx = 0;
-    pointer.vy = 0;
-    pointer.last = now;
-    pointer.active = true;
-    pointer.pointerId = event.pointerId;
-    pointer.history.length = 0;
-    pointer.history.push({ time: now, vx: 0, vy: 0 });
-    event.currentTarget.setPointerCapture(event.pointerId);
+    if (event.pointerType !== "mouse") {
+      if (pointer.pointerId !== null && pointer.pointerId !== event.pointerId) return;
+      const now = event.timeStamp;
+      pointer.x = event.clientX;
+      pointer.y = event.clientY;
+      pointer.lx = event.clientX;
+      pointer.ly = event.clientY;
+      pointer.vx = 0;
+      pointer.vy = 0;
+      pointer.last = now;
+      pointer.active = true;
+      pointer.pointerId = event.pointerId;
+      pointer.history.length = 0;
+      pointer.history.push({ time: now, vx: 0, vy: 0 });
+    }
+
+    if (isPanorama) {
+      const panoramaDrag = panoramaDragRef.current;
+      if (panoramaDrag.active && panoramaDrag.pointerId !== event.pointerId) return;
+      panoramaDrag.active = true;
+      panoramaDrag.pointerId = event.pointerId;
+      panoramaDrag.x = event.clientX;
+      panoramaDrag.y = event.clientY;
+      setPanoramaDragging(true);
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } else if (event.pointerType !== "mouse") {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
   };
 
   const endPointer = (event: ReactPointerEvent<HTMLElement>) => {
     const pointer = pointerRef.current;
-    if (pointer.pointerId !== event.pointerId) return;
-    pointer.active = false;
-    pointer.pointerId = null;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+    const panoramaDrag = panoramaDragRef.current;
+    let ownsPointer = false;
+    if (pointer.pointerId === event.pointerId) {
+      pointer.active = false;
+      pointer.pointerId = null;
+      ownsPointer = true;
+    }
+    if (panoramaDrag.pointerId === event.pointerId) {
+      panoramaDrag.active = false;
+      panoramaDrag.pointerId = null;
+      setPanoramaDragging(false);
+      ownsPointer = true;
+    }
+    if (ownsPointer && event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
+  };
+
+  const leavePointer = (event: ReactPointerEvent<HTMLElement>) => {
+    if (event.pointerType === "mouse" && pointerRef.current.pointerId === null && !panoramaDragRef.current.active) pointerRef.current.active = false;
   };
 
   const collapsePanelOutside = (event: ReactPointerEvent<HTMLElement>) => {
@@ -1183,12 +1435,23 @@ export default function Home() {
     reader.readAsDataURL(file);
   };
 
+  const selectScene = (nextScene: SceneId) => {
+    panoramaViewRef.current = { yaw: 0, pitch: 0 };
+    panoramaDragRef.current = { active: false, pointerId: null, x: 0, y: 0 };
+    setPanoramaDragging(false);
+    pointerRef.current.active = false;
+    pointerRef.current.history.length = 0;
+    setTipVisible(true);
+    setScene(nextScene);
+  };
+
   const resetSimulation = () => {
     if (shapeTimerRef.current) clearTimeout(shapeTimerRef.current);
     if (blobTimerRef.current) clearTimeout(blobTimerRef.current);
     settingsRef.current = defaults;
     setSettings(defaults);
     pointerRef.current.history.length = 0;
+    panoramaViewRef.current = { yaw: 0, pitch: 0 };
     seedParticles(defaults);
     seedBlobs(defaults);
   };
@@ -1199,18 +1462,20 @@ export default function Home() {
 
   return (
     <main
-      className={`experience scene-${scene}`}
+      className={`experience scene-${scene} ${isPanorama ? "panorama-mode" : ""} ${panoramaDragging ? "panorama-dragging" : ""}`}
       style={backgroundStyle}
       onPointerDown={beginPointer}
       onPointerMove={movePointer}
       onPointerUp={endPointer}
       onPointerCancel={endPointer}
+      onPointerLeave={leavePointer}
     >
       <div className="scene-content" aria-hidden="true">
         {scene === "paper" && <div className="reading-page"><span>THE QUIET ART OF SEEING</span><h2>Look slowly.</h2><p>When the gaze rests on a bright page, tiny shadows may drift across the field of view—always moving just after the eye.</p><p>Light enters, the page softens, and attention notices what was already there.</p></div>}
         {scene === "room" && <><div className="window-light"/><div className="plant"><i/><i/><i/><b/></div><div className="desk-line"/></>}
         {scene === "sky" && <><div className="sun-glow"/><div className="cloud cloud-one"/><div className="cloud cloud-two"/></>}
       </div>
+      {panoramaSource && <PanoramaViewer key={panoramaSource} source={panoramaSource} zoom={settings.panoramaZoom} viewRef={panoramaViewRef} />}
       <div className="vignette" aria-hidden="true" />
       <canvas ref={canvasRef} className="blob-canvas" aria-label={text.canvasLabel} />
       <div className="filament-layers" aria-hidden="true">
@@ -1227,7 +1492,7 @@ export default function Home() {
 
       <button className={`language-toggle ${panelOpen ? "" : "panel-collapsed"}`} type="button" onClick={toggleLanguage} aria-label={text.switchLanguage} title={text.switchLanguage}>{language === "zh" ? "EN" : "中"}</button>
 
-      {tipVisible && <div className="gesture-tip"><span className="cursor-symbol">↗</span><div><strong>{text.gestureTitle}</strong><small>{text.gestureSubtitle}</small></div></div>}
+      {tipVisible && <div className={`gesture-tip ${isPanorama ? "panorama-tip" : ""}`}><span className="cursor-symbol">{isPanorama ? "↔" : "↗"}</span><div><strong>{isPanorama ? text.panoramaGestureTitle : text.gestureTitle}</strong><small>{isPanorama ? text.panoramaGestureSubtitle : text.gestureSubtitle}</small></div></div>}
 
       <aside className={`panel ${panelOpen ? "open" : "closed"}`} onPointerMove={(event) => event.stopPropagation()}>
         <button className="panel-toggle" onClick={() => setPanelOpen((value) => !value)} aria-label={panelOpen ? text.collapsePanel : text.expandPanel}>{panelOpen ? "×" : text.adjust}</button>
@@ -1237,9 +1502,14 @@ export default function Home() {
           <section className="control-section background-section">
             <div className="section-title"><span>{text.background}</span><em>{text.backgroundHint}</em></div>
             <div className="scene-grid">
-              {scenes.map((item) => <button key={item.id} className={scene === item.id ? "active" : ""} onClick={() => setScene(item.id)}><b>{item.icon}</b><span>{text.scenes[item.id]}</span></button>)}
+              {scenes.map((item) => <button key={item.id} className={scene === item.id ? "active" : ""} onClick={() => selectScene(item.id)}><b>{item.icon}</b><span>{text.scenes[item.id]}</span></button>)}
               <label className={scene === "custom" ? "active" : ""}><input type="file" accept="image/*" onChange={chooseImage}/><b>＋</b><span>{text.custom}</span></label>
             </div>
+            {isPanorama && <div className="panorama-controls">
+              <div className="section-title"><span>{text.panoramaView}</span></div>
+              <Slider label={text.panoramaSensitivity} value={settings.panoramaSensitivity} min={20} max={200} unit="%" onChange={(v) => setValue("panoramaSensitivity", v)} />
+              <Slider label={text.panoramaZoom} value={settings.panoramaZoom} min={50} max={200} unit="%" onChange={(v) => setValue("panoramaZoom", v)} />
+            </div>}
           </section>
 
           <section className="control-section">
